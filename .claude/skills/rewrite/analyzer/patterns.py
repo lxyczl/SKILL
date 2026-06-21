@@ -19,12 +19,20 @@ class PatternLibrary:
         """从目录加载 builtin.json / user.json / learned.json。"""
         lib = cls()
         lib._learned_path = base_dir / "learned.json"
+        seen_ids: Set[str] = set()
 
         for filename in ("builtin.json", "user.json", "learned.json"):
             filepath = base_dir / filename
             data = cls._safe_load(filepath)
             if data:
-                lib._patterns.extend(data.get("patterns", []))
+                for pattern in data.get("patterns", []):
+                    pid = pattern.get("id")
+                    if pid and pid in seen_ids:
+                        # 覆盖已有同 id 模式
+                        lib._patterns = [p for p in lib._patterns if p.get("id") != pid]
+                    if pid:
+                        seen_ids.add(pid)
+                    lib._patterns.append(pattern)
                 lib._protected_terms.update(data.get("protected_terms", []))
                 if filename == "learned.json":
                     lib._learned_data = data
@@ -57,7 +65,10 @@ class PatternLibrary:
     def save_learned(self) -> None:
         """将 learned 数据持久化到 learned.json。"""
         if self._learned_path:
-            self._learned_path.write_text(
-                json.dumps(self._learned_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            try:
+                self._learned_path.write_text(
+                    json.dumps(self._learned_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as e:
+                print(f"警告：保存 learned.json 失败（{e}），已跳过")
