@@ -14,3 +14,6 @@ dev = [
 
 [project.scripts]
 aigc-analyze = "analyze:main"
+
+[tool.pytest.ini_options]
+pythonpath = [".claude/skills/rewrite"]
