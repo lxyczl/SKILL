@@ -44,10 +44,12 @@ def score_paragraph(text: str, section_type: str, patterns: list) -> dict:
     all_issues.extend(ai_traces["issues"])
     all_issues.extend(chinese["issues"])
 
-    # 各维度独立贡献风险分，上限 1.0
-    # 语义：每个维度独立检测，多维度同时命中时风险叠加
-    risk = syntax["score"] + vocabulary["score"] + ai_traces["score"] + chinese["score"]
-    risk = min(risk, 1.0)
+    risk = (
+        syntax["score"] * 0.2 +
+        vocabulary["score"] * 0.3 +
+        ai_traces["score"] * 0.25 +
+        chinese["score"] * 0.25
+    )
 
     weight = SECTION_WEIGHTS.get(section_type, 1.0)
     priority = risk * weight
