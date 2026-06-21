@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 
 def read_text_file(path: Path) -> str:
-    """读取文本文件，自动检测编码。"""
+    """读取 UTF-8 文本文件。"""
     return path.read_text(encoding="utf-8")
 
 
