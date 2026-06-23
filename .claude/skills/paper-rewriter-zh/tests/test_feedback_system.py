@@ -483,6 +483,110 @@ class TestRewriteWithFeedback:
         assert "研究->探究" in suggestions["preferred_vocabulary"]
 
 
+    def test_analyze_returns_hot_sentences(self):
+        r = self._make_rewriter()
+        result = r.analyze_rewrite(
+            original="研究表明该方法具有重要意义和价值",
+            rewritten="研究显示此方法具有重大作用与贡献",
+            domain="通用", intensity="中度"
+        )
+        assert "hot_sentences" in result
+        assert "needs_iteration" in result
+        assert isinstance(result["hot_sentences"], list)
+
+    def test_analyze_needs_iteration_on_fail(self):
+        r = self._make_rewriter()
+        result = r.analyze_rewrite(
+            original="测试文本",
+            rewritten="测试文本",  # 完全相同
+            domain="通用", intensity="中度"
+        )
+        assert result["needs_iteration"] is True
+
+    def test_get_suggestions_with_current_metrics(self):
+        r = self._make_rewriter()
+        suggestions = r.get_suggestions("通用", "中度")
+        assert "targeted_advice" in suggestions
+        # 带 current_metrics 调用
+        suggestions2 = r.get_suggestions("通用", "中度", current_metrics={
+            "max_consecutive": 15, "trigram_overlap": 0.3
+        })
+        assert "priority_techniques" in suggestions2
+        assert len(suggestions2["targeted_advice"]) > len(suggestions["targeted_advice"])
+
+
+class TestTargetedAdvice:
+    """针对性建议测试"""
+
+    def _make_system(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        return FeedbackSystem(skill_dir=tmpdir)
+
+    def test_targeted_advice_from_problem_patterns(self):
+        system = self._make_system()
+        # 模拟历史失败
+        system.strategies["problem_patterns"].append({
+            "issue": "连续15字匹配",
+            "failure_type": "consecutive_too_long",
+            "domain": "生态水文",
+            "intensity": "中度",
+        })
+        suggestions = system.get_rewrite_suggestions("生态水文", "中度")
+        assert "targeted_advice" in suggestions
+        assert any("连续匹配" in a or "句式重组" in a for a in suggestions["targeted_advice"])
+
+    def test_targeted_advice_empty_when_no_problems(self):
+        system = self._make_system()
+        suggestions = system.get_rewrite_suggestions("通用", "中度")
+        assert suggestions["targeted_advice"] == []
+
+
+class TestAdaptiveLearningRate:
+    """自适应学习率测试"""
+
+    def _make_system(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        return FeedbackSystem(skill_dir=tmpdir)
+
+    def test_consecutive_failures_increases_step(self):
+        system = self._make_system()
+        # 连续失败 3 次
+        for _ in range(3):
+            session = system.record_rewrite_session(
+                original_text="测试文本", rewritten_text="测试文本",  # 完全相同
+                intensity="中度"
+            )
+            system.auto_learn(session["session_id"])
+        mult = system.strategies["intensity_adjustments"]["中度"]["multiplier"]
+        # 第1次 step=0.05, 第2次 step=0.06, 第3次 step=0.07, 总增 0.18
+        assert mult > 1.15
+
+    def test_step_upper_bound(self):
+        system = self._make_system()
+        # 连续失败很多次
+        for _ in range(20):
+            session = system.record_rewrite_session(
+                original_text="测试", rewritten_text="测试",
+                intensity="中度"
+            )
+            system.auto_learn(session["session_id"])
+        # step 不应超过 0.10
+        failures = system.strategies["intensity_adjustments"]["中度"]["consecutive_failures"]
+        step = min(0.10, 0.05 + (failures - 1) * 0.01)
+        assert step <= 0.10
+
+    def test_multiplier_hard_bounds(self):
+        system = self._make_system()
+        # 测试上界
+        for _ in range(100):
+            session = system.record_rewrite_session(
+                original_text="测试", rewritten_text="测试",
+                intensity="轻度"
+            )
+            system.auto_learn(session["session_id"])
+        assert system.strategies["intensity_adjustments"]["轻度"]["multiplier"] <= 1.5
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

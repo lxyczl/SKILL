@@ -143,9 +143,9 @@ class FeedbackSystem:
             "technique_effectiveness": {k: dict(v) for k, v in ALL_TECHNIQUES.items()},
             "domain_patterns": {},
             "intensity_adjustments": {
-                "轻度": {"multiplier": 1.0},
-                "中度": {"multiplier": 1.0},
-                "重度": {"multiplier": 1.0}
+                "轻度": {"multiplier": 1.0, "consecutive_failures": 0, "consecutive_successes": 0},
+                "中度": {"multiplier": 1.0, "consecutive_failures": 0, "consecutive_successes": 0},
+                "重度": {"multiplier": 1.0, "consecutive_failures": 0, "consecutive_successes": 0}
             },
             "technique_combinations": {},
             "problem_patterns": [],
@@ -297,17 +297,20 @@ class FeedbackSystem:
             pattern["session_count"]
         )
 
-        # 4. 学习强度调整（不对称学习率）
+        # 4. 学习强度调整（自适应步长）
+        adjustment = self.strategies["intensity_adjustments"][intensity]
         if not is_success:
-            current_mult = self.strategies["intensity_adjustments"][intensity]["multiplier"]
-            self.strategies["intensity_adjustments"][intensity]["multiplier"] = min(
-                1.5, current_mult + 0.05
-            )
+            count = adjustment.get("consecutive_failures", 0)
+            step = min(0.10, 0.05 + count * 0.01)
+            adjustment["multiplier"] = min(1.5, adjustment["multiplier"] + step)
+            adjustment["consecutive_failures"] = count + 1
+            adjustment["consecutive_successes"] = 0
         elif evaluation["verdict"] == "excellent":
-            current_mult = self.strategies["intensity_adjustments"][intensity]["multiplier"]
-            self.strategies["intensity_adjustments"][intensity]["multiplier"] = max(
-                0.5, current_mult - 0.02
-            )
+            count = adjustment.get("consecutive_successes", 0)
+            step = max(0.01, 0.02 - count * 0.003)
+            adjustment["multiplier"] = max(0.5, adjustment["multiplier"] - step)
+            adjustment["consecutive_successes"] = count + 1
+            adjustment["consecutive_failures"] = 0
 
         # 5. 记录问题模式（失败时）
         if not is_success:
@@ -468,7 +471,8 @@ class FeedbackSystem:
     def get_rewrite_suggestions(
         self,
         domain: str = "通用",
-        intensity: str = "中度"
+        intensity: str = "中度",
+        current_metrics: dict = None
     ) -> dict:
         """获取改写建议（基于学习到的策略）"""
         suggestions = {
@@ -476,7 +480,8 @@ class FeedbackSystem:
             "effective_techniques": [],
             "intensity_multiplier": 1.0,
             "domain_issues": [],
-            "new_terms_to_preserve": []
+            "new_terms_to_preserve": [],
+            "targeted_advice": []
         }
 
         for key, data in self.strategies["vocabulary_preferences"].items():
@@ -512,6 +517,46 @@ class FeedbackSystem:
                         "combination": combo_key,
                         "success_rate": round(rate, 2)
                     })
+
+        # 基于历史问题模式生成建议（使用 failure_type）
+        recent_problems = [
+            p for p in self.strategies["problem_patterns"]
+            if p.get("domain") == domain
+        ][-5:]
+
+        failure_type_advice = {
+            "consecutive_too_long": "该学科历史改写中多次出现超长连续匹配，建议优先使用句式重组+拆分长句",
+            "structure_too_similar": "该学科历史改写中句式相似度偏高，建议加强结构调整",
+            "consecutive_risk": "该学科历史改写中连续匹配接近阈值，建议增加句式变化",
+            "trigram_risk": "该学科历史改写中三元组重叠率偏高，建议加强结构调整",
+        }
+        seen_types = set()
+        for problem in recent_problems:
+            ft = problem.get("failure_type", "")
+            if ft in failure_type_advice and ft not in seen_types:
+                suggestions["targeted_advice"].append(failure_type_advice[ft])
+                seen_types.add(ft)
+
+        # 基于当前文本指标的动态建议
+        if current_metrics:
+            mc = current_metrics.get("max_consecutive", 0)
+            tri = current_metrics.get("trigram_overlap", 0)
+
+            if mc >= 13:
+                suggestions["priority_techniques"] = ["句式重组", "拆分长句", "主被动转换"]
+                suggestions["targeted_advice"].append(
+                    f"存在 {mc} 字连续匹配（超过知网 13 字阈值），必须使用句式重组打破结构"
+                )
+            elif mc >= 10:
+                suggestions["priority_techniques"] = ["句式重组", "同义词替换", "调整语序"]
+                suggestions["targeted_advice"].append(
+                    f"连续匹配 {mc} 字，接近阈值，建议使用句式重组+同义词替换"
+                )
+            elif tri >= 0.20:
+                suggestions["priority_techniques"] = ["同义词替换", "因果倒置", "条件重组"]
+                suggestions["targeted_advice"].append(
+                    f"三元组重叠率 {tri:.1%}，需要改变句子结构和用词"
+                )
 
         return suggestions
 
