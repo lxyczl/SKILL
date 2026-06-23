@@ -320,6 +320,7 @@ class FeedbackSystem:
         self,
         section_type: str = "body",
         intensity: str = "medium",
+        current_metrics: dict = None,
     ) -> dict:
         """获取改写建议（基于历史学习）。
 
@@ -331,6 +332,9 @@ class FeedbackSystem:
                 "preferred_vocabulary": [...],
                 "session_count": int,
                 "avg_reduction": float,
+                "targeted_advice": [...],
+                "priority_techniques": [...],
+                "effective_combinations": [...],
             }
         """
         suggestions = {
@@ -340,6 +344,9 @@ class FeedbackSystem:
             "preferred_vocabulary": [],
             "session_count": self.strategies["session_count"],
             "avg_reduction": 0.0,
+            "targeted_advice": [],
+            "priority_techniques": [],
+            "effective_combinations": [],
         }
 
         # 1. 全局有效技巧（成功率 ≥ 60%）
@@ -361,12 +368,10 @@ class FeedbackSystem:
             sp = self.strategies["section_patterns"][section_type]
             suggestions["section_issues"] = sp.get("common_issues", [])[-5:]
 
-            # 章节特定有效技巧
             for tech, data in sp.get("effective_techniques", {}).items():
                 if data["total"] >= 2:
                     rate = data["success"] / data["total"]
                     if rate >= 0.6:
-                        # 检查是否已在全局列表中
                         existing = {t["technique"] for t in suggestions["effective_techniques"]}
                         if tech not in existing:
                             suggestions["effective_techniques"].append({
@@ -382,7 +387,7 @@ class FeedbackSystem:
                 "intensity_adjustments"
             ][intensity]["multiplier"]
 
-        # 4. 词汇偏好（成功 ≥ 2 次的替换对）
+        # 4. 词汇偏好
         for key, data in self.strategies["vocabulary_preferences"].items():
             if data.get("success", 0) >= 2:
                 suggestions["preferred_vocabulary"].append(key)
@@ -393,6 +398,52 @@ class FeedbackSystem:
             suggestions["avg_reduction"] = round(
                 self.strategies["total_risk_reduction"] / count, 3
             )
+
+        # 6. 有效技巧组合（成功率 ≥ 70%，总次数 ≥ 2）
+        for combo_key, data in self.strategies.get("technique_combinations", {}).items():
+            if data["total"] >= 2:
+                rate = data["success"] / data["total"]
+                if rate >= 0.7:
+                    suggestions["effective_combinations"].append({
+                        "combination": combo_key,
+                        "success_rate": round(rate, 2),
+                    })
+
+        # 7. 基于当前指标的针对性建议
+        if current_metrics:
+            failure_type = current_metrics.get("failure_type", "")
+
+            advice_map = {
+                "risk_increased": ("降低改写激进程度，保留更多原文结构", ["cliche_replace"]),
+                "minimal_effect": ("加强改写力度，使用 sentence_restructure", ["sentence_restructure", "cliche_replace"]),
+                "cliche_persistent": ("套话未消除，优先使用 cliche_replace", ["cliche_replace"]),
+                "connector_persistent": ("连接词问题未解决，使用 connector_replace", ["connector_replace"]),
+                "pattern_persistent": ("句式模式未打破，使用 sentence_restructure", ["sentence_restructure"]),
+            }
+
+            if failure_type in advice_map:
+                advice, techniques = advice_map[failure_type]
+                suggestions["targeted_advice"].append(advice)
+                suggestions["priority_techniques"] = techniques
+
+        # 8. 基于历史问题模式的建议
+        recent_problems = [
+            p for p in self.strategies.get("problem_patterns", [])
+            if p.get("section") == section_type
+        ][-5:]
+
+        failure_type_advice = {
+            "risk_increased": "该章节历史改写中多次出现风险反升，建议降低改写激进程度",
+            "minimal_effect": "该章节历史改写中效果不明显，建议加强改写力度",
+            "cliche_persistent": "该章节历史改写中套话难以消除，建议优先处理套话",
+        }
+
+        seen_types = set()
+        for problem in recent_problems:
+            ft = problem.get("failure_type", "")
+            if ft in failure_type_advice and ft not in seen_types:
+                suggestions["targeted_advice"].append(failure_type_advice[ft])
+                seen_types.add(ft)
 
         return suggestions
 
