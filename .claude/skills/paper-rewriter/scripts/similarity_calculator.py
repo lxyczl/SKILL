@@ -15,8 +15,54 @@ import re
 
 # ── 基础工具 ──────────────────────────────────────────────────────
 
-def tokenize(text: str) -> list[str]:
-    """将文本分词为小写单词列表"""
+import warnings
+
+
+# 精简停用词表（学术英文高频虚词，约 60 个）
+# 仅用于 n-gram 重叠率计算中的 content_word_overlap，不用于连续匹配检测
+STOPWORDS = {
+    "the", "a", "an", "of", "in", "to", "for", "with", "on", "at",
+    "from", "by", "as", "is", "was", "are", "were", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "this", "that", "these",
+    "those", "it", "its", "they", "their", "them", "he", "she", "his",
+    "her", "we", "our", "you", "your", "not", "no", "but", "or", "and",
+    "if", "then", "than", "so", "such", "which", "who", "whom", "what",
+}
+
+
+def _filter_stopwords(tokens: list[str]) -> list[str]:
+    """过滤停用词，保留实词"""
+    return [t for t in tokens if t not in STOPWORDS]
+
+
+def tokenize(text: str, mode: str = "word") -> list[str]:
+    """将文本分词。优先 nltk，fallback 到正则。
+
+    Args:
+        text: 输入文本
+        mode: "word" 使用 nltk（fallback 正则），"regex" 强制使用正则
+
+    Returns:
+        分词结果列表
+    """
+    if mode == "word":
+        try:
+            from nltk import word_tokenize
+            tokens = word_tokenize(text)
+            return [t.lower() for t in tokens if t.isalpha() and len(t) > 1]
+        except ImportError:
+            warnings.warn(
+                "nltk 未安装，降级到正则分词。安装 nltk 可获得更精准的分词: pip install nltk",
+                UserWarning, stacklevel=2
+            )
+        # fallback 到正则时仍过滤单字符，保持 word 模式语义一致
+        return [t for t in _regex_tokenize(text) if len(t) > 1]
+    return _regex_tokenize(text)
+
+
+def _regex_tokenize(text: str) -> list[str]:
+    """正则分词（原有逻辑，保留作为 fallback）"""
     return re.findall(r'\b[a-z]+\b', text.lower())
 
 
@@ -205,7 +251,7 @@ def calculate_similarity(original: str, rewritten: str) -> dict:
         vocab_ovl * 15 +             # 词汇重叠
         min(max_consec / 10, 1.0) * 10  # 连续匹配惩罚（10 词封顶）
     )
-    composite = round(min(100, composite * 100), 1)
+    composite = round(min(100, composite), 1)
 
     return {
         "composite_score": composite,

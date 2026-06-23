@@ -24,7 +24,8 @@ class TestSimilarityCalculator:
     def test_tokenize_ignores_punctuation(self):
         from similarity_calculator import tokenize
         result = tokenize("Hello, world! This is a test.")
-        assert result == ["hello", "world", "this", "is", "a", "test"]
+        # word 模式下过滤单字符（如 "a"），其余保留
+        assert result == ["hello", "world", "this", "is", "test"]
 
     def test_ngrams(self):
         from similarity_calculator import ngrams
@@ -270,6 +271,113 @@ class TestFeedbackSystem:
         system = FeedbackSystem(tmp_path)
         report = system.get_strategy_report()
         assert "反馈学习策略报告" in report
+
+
+class TestDocumentParser:
+    """测试文档章节识别"""
+
+    def test_identify_sections_numbered(self):
+        from document_parser import identify_sections
+        paragraphs = [
+            {"index": 0, "text": "My Paper Title"},
+            {"index": 1, "text": "Abstract This is the abstract text with enough content to be recognized as abstract."},
+            {"index": 2, "text": "Keywords: ecology, hydrology"},
+            {"index": 3, "text": "1. Introduction"},
+            {"index": 4, "text": "This is the introduction."},
+            {"index": 5, "text": "2. Methods"},
+            {"index": 6, "text": "We used DRASTIC model."},
+            {"index": 7, "text": "3. Results"},
+            {"index": 8, "text": "The results show effectiveness."},
+            {"index": 9, "text": "4. Discussion"},
+            {"index": 10, "text": "These findings suggest."},
+            {"index": 11, "text": "5. Conclusion"},
+            {"index": 12, "text": "In conclusion, we found."},
+            {"index": 13, "text": "References"},
+        ]
+        sections = identify_sections(paragraphs)
+        assert sections["title"] == "My Paper Title"
+        assert sections["introduction"] == ["This is the introduction."]
+        assert sections["methods"] == ["We used DRASTIC model."]
+        assert sections["results"] == ["The results show effectiveness."]
+        assert sections["discussion"] == ["These findings suggest."]
+        assert sections["conclusion"] == ["In conclusion, we found."]
+
+    def test_identify_sections_unnumbered(self):
+        from document_parser import identify_sections
+        paragraphs = [
+            {"index": 0, "text": "Paper Title"},
+            {"index": 1, "text": "Abstract: This is the abstract with enough content."},
+            {"index": 2, "text": "Introduction"},
+            {"index": 3, "text": "Background text here."},
+            {"index": 4, "text": "Methodology"},
+            {"index": 5, "text": "We applied the method."},
+            {"index": 6, "text": "Results"},
+            {"index": 7, "text": "The results demonstrate."},
+            {"index": 8, "text": "Discussion"},
+            {"index": 9, "text": "These results indicate."},
+            {"index": 10, "text": "Conclusion"},
+            {"index": 11, "text": "We conclude that."},
+        ]
+        sections = identify_sections(paragraphs)
+        assert sections["introduction"] == ["Background text here."]
+        assert sections["methods"] == ["We applied the method."]
+        assert sections["results"] == ["The results demonstrate."]
+        assert sections["discussion"] == ["These results indicate."]
+        assert sections["conclusion"] == ["We conclude that."]
+
+    def test_identify_sections_uppercase(self):
+        from document_parser import identify_sections
+        paragraphs = [
+            {"index": 0, "text": "TITLE"},
+            {"index": 1, "text": "ABSTRACT: This is the abstract content with enough words to exceed the minimum threshold for detection."},
+            {"index": 2, "text": "INTRODUCTION"},
+            {"index": 3, "text": "Intro text."},
+            {"index": 4, "text": "MATERIALS AND METHODS"},
+            {"index": 5, "text": "Methods text."},
+        ]
+        sections = identify_sections(paragraphs)
+        assert sections["introduction"] == ["Intro text."]
+        assert sections["methods"] == ["Methods text."]
+
+    def test_identify_sections_methodology(self):
+        from document_parser import identify_sections
+        paragraphs = [
+            {"index": 0, "text": "Title"},
+            {"index": 1, "text": "Introduction text."},
+            {"index": 2, "text": "Methodology"},
+            {"index": 3, "text": "We conducted experiments."},
+        ]
+        sections = identify_sections(paragraphs)
+        assert sections["methods"] == ["We conducted experiments."]
+
+
+class TestTurnitinParserExtended:
+    """测试 Turnitin 解析器扩展功能"""
+
+    def test_detect_color_css_class(self):
+        from turnitin_parser import detect_color
+        assert detect_color('<span class="highlight-red">text</span>') == "red"
+        assert detect_color('<span class="highlight-orange">text</span>') == "orange"
+        assert detect_color('<span class="match-yellow">text</span>') == "yellow"
+        assert detect_color('<span class="similarity-green">text</span>') == "green"
+
+    def test_detect_color_hex_inline(self):
+        from turnitin_parser import detect_color
+        assert detect_color('<span style="background-color: #ff0000">text</span>') == "red"
+        assert detect_color('<span style="color: #ffa500">text</span>') == "orange"
+        assert detect_color('<span style="background-color: #ffff00">text</span>') == "yellow"
+
+    def test_detect_color_data_attribute(self):
+        from turnitin_parser import detect_color
+        assert detect_color('<span data-color="1">text</span>') == "red"
+        assert detect_color('<span data-color="2">text</span>') == "orange"
+        assert detect_color('<span data-color="3">text</span>') == "yellow"
+
+    def test_detect_color_percentage_plagiarism(self):
+        from turnitin_parser import detect_color
+        assert detect_color("35% plagiarism detected") == "red"
+        assert detect_color("60% match found") == "orange"
+        assert detect_color("15% similarity") == "yellow"
 
 
 if __name__ == "__main__":
