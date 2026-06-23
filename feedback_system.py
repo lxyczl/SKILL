@@ -7,6 +7,7 @@
 import json
 import uuid
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 from typing import Optional
 
@@ -212,11 +213,15 @@ class FeedbackSystem:
 
     def _learn_from_session(self, session: dict) -> None:
         """从会话中学习并更新策略。"""
-        success = session["success"]
         section = session["section_type"]
         techniques = session["techniques_used"]
         issues = session["issues_resolved"]
         reduction = session["risk_reduction"]
+
+        # 0. 使用 auto_evaluate 判定成功/失败
+        eval_result = auto_evaluate(session["risk_before"], session["risk_after"])
+        success = eval_result["is_success"]
+        verdict = eval_result["verdict"]
 
         # 1. 全局统计
         self.strategies["session_count"] += 1
@@ -233,7 +238,17 @@ class FeedbackSystem:
             if success:
                 self.strategies["technique_effectiveness"][tech]["success"] += 1
 
-        # 3. 章节模式
+        # 3. 技巧组合学习
+        if len(techniques) >= 2:
+            for t1, t2 in combinations(sorted(techniques), 2):
+                combo_key = f"{t1}+{t2}"
+                if combo_key not in self.strategies["technique_combinations"]:
+                    self.strategies["technique_combinations"][combo_key] = {"success": 0, "total": 0}
+                self.strategies["technique_combinations"][combo_key]["total"] += 1
+                if success:
+                    self.strategies["technique_combinations"][combo_key]["success"] += 1
+
+        # 4. 章节模式
         if section not in self.strategies["section_patterns"]:
             self.strategies["section_patterns"][section] = {
                 "avg_reduction": 0.0,
@@ -249,13 +264,11 @@ class FeedbackSystem:
         )
         sp["session_count"] += 1
 
-        # 记录该章节的常见 issue
         for issue in issues:
             if issue not in sp["common_issues"]:
                 sp["common_issues"].append(issue)
         sp["common_issues"] = sp["common_issues"][-10:]
 
-        # 记录该章节的有效技巧
         for tech in techniques:
             if tech not in sp["effective_techniques"]:
                 sp["effective_techniques"][tech] = {"success": 0, "total": 0}
@@ -263,27 +276,37 @@ class FeedbackSystem:
             if success:
                 sp["effective_techniques"][tech]["success"] += 1
 
-        # 4. 强度自适应
-        if not success and reduction < -0.1:
-            # 风险分反而升高，加强改写强度
-            for level in ("light", "medium"):
-                cur = self.strategies["intensity_adjustments"][level]["multiplier"]
-                self.strategies["intensity_adjustments"][level]["multiplier"] = min(
-                    1.5, round(cur + 0.05, 2)
-                )
-        elif success and reduction > 0.3:
-            # 大幅降低，可以稍微减弱
-            cur = self.strategies["intensity_adjustments"]["medium"]["multiplier"]
-            self.strategies["intensity_adjustments"]["medium"]["multiplier"] = max(
-                0.5, round(cur - 0.02, 2)
-            )
+        # 5. 自适应学习率
+        intensity = session.get("intensity", "medium")
+        adjustment = self.strategies["intensity_adjustments"][intensity]
 
-        # 5. 问题模式
         if not success:
+            count = adjustment["consecutive_failures"]
+            step = min(0.10, 0.05 + count * 0.01)
+            adjustment["multiplier"] = min(1.5, adjustment["multiplier"] + step)
+            adjustment["consecutive_failures"] = count + 1
+            adjustment["consecutive_successes"] = 0
+        elif verdict == "excellent":
+            count = adjustment["consecutive_successes"]
+            step = max(0.01, 0.02 - count * 0.003)
+            adjustment["multiplier"] = max(0.5, adjustment["multiplier"] - step)
+            adjustment["consecutive_successes"] = count + 1
+            adjustment["consecutive_failures"] = 0
+        else:
+            adjustment["consecutive_failures"] = 0
+            adjustment["consecutive_successes"] = 0
+
+        # 6. 问题模式（含失败类型）
+        if not success:
+            failure_type = classify_failure(
+                session["risk_before"], session["risk_after"],
+                session.get("issues_before", []), session.get("issues_after", [])
+            )
             self.strategies["problem_patterns"].append({
                 "section": section,
                 "risk_before": session["risk_before"],
                 "risk_after": session["risk_after"],
+                "failure_type": failure_type,
                 "techniques": techniques,
                 "timestamp": session["timestamp"],
             })
@@ -425,7 +448,8 @@ class FeedbackSystem:
         if problems:
             lines.append("### 最近问题（最近 5 个）")
             for p in problems[-5:]:
-                lines.append(f"- [{p['section']}] {p['risk_before']:.2f}→{p['risk_after']:.2f} 技巧: {', '.join(p.get('techniques', []))}")
+                ft = p.get("failure_type", "unknown")
+                lines.append(f"- [{p['section']}] {p['risk_before']:.2f}→{p['risk_after']:.2f} 类型: {ft} 技巧: {', '.join(p.get('techniques', []))}")
             lines.append("")
 
         lines.append(f"*更新时间: {s.get('last_updated', 'N/A')}*")

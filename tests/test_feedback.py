@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from feedback_system import FeedbackSystem
+from feedback_system import FeedbackSystem, auto_evaluate
 
 
 def test_record_session(tmp_path):
@@ -232,3 +232,264 @@ class TestClassifyFailure:
         """成功时返回 none"""
         from feedback_system import classify_failure
         assert classify_failure(0.8, 0.2, [], []) == "none"
+
+
+# ── Task 3: _learn_from_session 集成测试 ──
+
+
+class TestTechniqueCombinationLearning:
+    """技巧组合学习测试"""
+
+    def test_combo_tracked_for_two_techniques(self, tmp_path):
+        """两个技巧应产生一个组合"""
+        fs = FeedbackSystem(tmp_path)
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace", "connector_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.8,
+            "risk_after": 0.2,
+            "risk_reduction": 0.6,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        combos = fs.strategies["technique_combinations"]
+        assert "cliche_replace+connector_replace" in combos
+        assert combos["cliche_replace+connector_replace"]["total"] == 1
+        assert combos["cliche_replace+connector_replace"]["success"] == 1
+
+    def test_combo_not_tracked_for_single_technique(self, tmp_path):
+        """单个技巧不应产生组合"""
+        fs = FeedbackSystem(tmp_path)
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.8,
+            "risk_after": 0.2,
+            "risk_reduction": 0.6,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        assert len(fs.strategies["technique_combinations"]) == 0
+
+    def test_combo_failure_not_counted_as_success(self, tmp_path):
+        """失败时组合不应计入成功"""
+        fs = FeedbackSystem(tmp_path)
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace", "connector_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.6,
+            "risk_reduction": -0.1,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        combo = fs.strategies["technique_combinations"]["cliche_replace+connector_replace"]
+        assert combo["total"] == 1
+        assert combo["success"] == 0
+
+
+class TestAdaptiveLearningRate:
+    """自适应学习率测试"""
+
+    def test_consecutive_failures_increase_step(self, tmp_path):
+        """连续失败应逐步加大调整步长"""
+        fs = FeedbackSystem(tmp_path)
+        adj = fs.strategies["intensity_adjustments"]["medium"]
+        initial = adj["multiplier"]
+
+        session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.6,
+            "risk_reduction": -0.1,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+        first_fail = adj["multiplier"]
+        assert first_fail > initial
+        assert adj["consecutive_failures"] == 1
+
+        fs._learn_from_session(session)
+        second_fail = adj["multiplier"]
+        assert second_fail > first_fail
+        assert adj["consecutive_failures"] == 2
+
+    def test_consecutive_successes_decrease_step(self, tmp_path):
+        """连续 excellent 应逐步降低强度"""
+        fs = FeedbackSystem(tmp_path)
+        adj = fs.strategies["intensity_adjustments"]["medium"]
+        initial = adj["multiplier"]
+
+        session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.9,
+            "risk_after": 0.1,
+            "risk_reduction": 0.8,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+        first_success = adj["multiplier"]
+        assert first_success < initial
+        assert adj["consecutive_successes"] == 1
+
+        fs._learn_from_session(session)
+        second_success = adj["multiplier"]
+        assert second_success < first_success
+        assert adj["consecutive_successes"] == 2
+
+    def test_failure_resets_successes(self, tmp_path):
+        """失败应重置连续成功计数"""
+        fs = FeedbackSystem(tmp_path)
+        adj = fs.strategies["intensity_adjustments"]["medium"]
+
+        success_session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.9,
+            "risk_after": 0.1,
+            "risk_reduction": 0.8,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(success_session)
+        assert adj["consecutive_successes"] == 1
+
+        fail_session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.6,
+            "risk_reduction": -0.1,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(fail_session)
+        assert adj["consecutive_successes"] == 0
+        assert adj["consecutive_failures"] == 1
+
+    def test_multiplier_bounds(self, tmp_path):
+        """乘数不应超出 [0.5, 1.5] 范围"""
+        fs = FeedbackSystem(tmp_path)
+        adj = fs.strategies["intensity_adjustments"]["medium"]
+
+        fail_session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.6,
+            "risk_reduction": -0.1,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        for _ in range(50):
+            fs._learn_from_session(fail_session)
+        assert adj["multiplier"] <= 1.5
+
+        # 重置后多次成功
+        adj["multiplier"] = 1.0
+        adj["consecutive_failures"] = 0
+        adj["consecutive_successes"] = 0
+        success_session = {
+            "section_type": "body",
+            "techniques_used": [],
+            "issues_resolved": [],
+            "risk_before": 0.9,
+            "risk_after": 0.1,
+            "risk_reduction": 0.8,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        for _ in range(50):
+            fs._learn_from_session(success_session)
+        assert adj["multiplier"] >= 0.5
+
+
+class TestProblemPatternsWithFailureType:
+    """问题模式应包含 failure_type"""
+
+    def test_failure_pattern_includes_type(self, tmp_path):
+        """失败记录应包含 failure_type 字段"""
+        fs = FeedbackSystem(tmp_path)
+        session = {
+            "section_type": "discussion",
+            "techniques_used": ["cliche_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.6,
+            "risk_reduction": -0.1,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        assert len(fs.strategies["problem_patterns"]) == 1
+        pattern = fs.strategies["problem_patterns"][0]
+        assert "failure_type" in pattern
+        assert pattern["failure_type"] == "risk_increased"
+
+    def test_success_no_problem_pattern(self, tmp_path):
+        """成功不应记录问题模式"""
+        fs = FeedbackSystem(tmp_path)
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.8,
+            "risk_after": 0.2,
+            "risk_reduction": 0.6,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        assert len(fs.strategies["problem_patterns"]) == 0
+
+
+class TestAutoEvaluateIntegration:
+    """auto_evaluate 集成到 _learn_from_session 的行为测试"""
+
+    def test_partial_failure_not_counted_as_success(self, tmp_path):
+        """auto_evaluate 判定 partial 时不应计入技巧成功"""
+        fs = FeedbackSystem(tmp_path)
+
+        # 0.8→0.45 降低 0.35，但 risk_after=0.45 > threshold=0.3 → partial
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.8,
+            "risk_after": 0.45,
+            "risk_reduction": 0.35,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        tech = fs.strategies["technique_effectiveness"]["cliche_replace"]
+        assert tech["total"] == 1
+        assert tech["success"] == 0  # partial 不算成功
+
+    def test_marginal_failure_not_counted(self, tmp_path):
+        """marginal 不应计入技巧成功"""
+        fs = FeedbackSystem(tmp_path)
+
+        # 0.5→0.47 降低 0.03 < 0.05 → marginal
+        session = {
+            "section_type": "body",
+            "techniques_used": ["cliche_replace"],
+            "issues_resolved": [],
+            "risk_before": 0.5,
+            "risk_after": 0.47,
+            "risk_reduction": 0.03,
+            "timestamp": "2026-01-01T00:00:00",
+        }
+        fs._learn_from_session(session)
+
+        tech = fs.strategies["technique_effectiveness"]["cliche_replace"]
+        assert tech["success"] == 0
