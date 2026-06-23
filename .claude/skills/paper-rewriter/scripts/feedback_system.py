@@ -9,6 +9,64 @@ from datetime import datetime
 from collections import defaultdict
 
 
+def auto_evaluate(metrics: dict) -> dict:
+    """基于客观指标自动判定成功/失败。Turnitin 比知网更敏感，阈值更严格。"""
+    mc = metrics.get("max_consecutive", 0)
+    tri = metrics.get("trigram_precision", 0)
+
+    if mc >= 8:
+        verdict = "fail"
+    elif mc >= 5 or tri >= 0.30:
+        verdict = "warning"
+    elif tri < 0.15 and mc < 4:
+        verdict = "excellent"
+    else:
+        verdict = "success"
+
+    return {
+        "verdict": verdict,
+        "is_success": verdict in ("success", "excellent"),
+        "max_consecutive": mc,
+        "trigram_precision": tri,
+        "reason": _verdict_reason(verdict, mc, tri),
+    }
+
+
+def _verdict_reason(verdict: str, mc: int, tri: float) -> str:
+    """生成判定原因说明"""
+    if verdict == "fail":
+        return f"连续匹配 {mc} 词，超过 Turnitin 阈值（8 词）"
+    elif verdict == "warning":
+        if mc >= 5:
+            return f"连续匹配 {mc} 词，接近阈值"
+        return f"三元组精度 {tri:.1%}，句式相似度偏高"
+    elif verdict == "excellent":
+        return "改写充分，相似度低"
+    return "可接受"
+
+
+def classify_failure(metrics: dict, verdict: str) -> str:
+    """根据指标和已有 verdict 细分失败原因。"""
+    if verdict in ("excellent", "success"):
+        return "none"
+
+    mc = metrics.get("max_consecutive", 0)
+    tri = metrics.get("trigram_precision", 0)
+
+    if verdict == "fail":
+        return "consecutive_too_long"
+    elif verdict == "warning":
+        if mc >= 5 and tri >= 0.25:
+            return "structure_too_similar"
+        elif mc >= 5:
+            return "consecutive_risk"
+        elif tri >= 0.20:
+            return "trigram_risk"
+        else:
+            return "mixed_risk"
+    return "none"
+
+
 class FeedbackSystem:
     """反馈学习系统"""
 
