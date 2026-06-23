@@ -14,6 +14,8 @@ ABBREVIATIONS = {
 
 def _ends_with_abbreviation(text: str) -> bool:
     """检查文本是否以缩写结尾"""
+    if not text.strip():
+        return False
     last_word = text.strip().split()[-1].rstrip('.').lower()
     return last_word in ABBREVIATIONS
 

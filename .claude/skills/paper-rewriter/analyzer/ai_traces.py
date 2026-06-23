@@ -1,7 +1,6 @@
 """AI 痕迹检测维度（英文学术写作）。"""
 
 import re
-import statistics
 from analyzer.syntax import split_sentences
 
 

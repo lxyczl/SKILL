@@ -1,6 +1,7 @@
 """英文学术写作特有特征分析。"""
 
 import re
+from analyzer.syntax import split_sentences
 
 
 def analyze_english(text: str) -> dict:
@@ -63,7 +64,7 @@ def analyze_english(text: str) -> dict:
         })
 
     # 5. 段首句模式单调 — 连续 "The" / "In" / "It" 开头
-    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+    sentences = split_sentences(text)
     if len(sentences) >= 4:
         first_words = [s.split()[0] if s.split() else "" for s in sentences[:8]]
         the_in_it = sum(1 for w in first_words if w.lower() in ("the", "in", "it", "this", "these"))
