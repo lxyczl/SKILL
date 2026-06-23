@@ -4,7 +4,6 @@ description: |
   Rewrite English academic papers to reduce similarity scores. Use this skill when the user wants to:
   - Rewrite/paraphrase English academic text
   - Reduce plagiarism/similarity detection scores
-  - Lower AIGC detection rates
   - "降重", "改写", "rewrite", "paraphrase", "reduce similarity"
 ---
 
@@ -13,26 +12,81 @@ description: |
 ## 核心流程
 
 ### 场景1：用户发文本
-1. （可选）扫描学科关键词 → 读取 `references/domains.md` 对应词汇
-2. 按规则改写 → 检查清单验证 → 返回结果
-3. 改写后主动询问满意度，收集反馈
+1. **分析风险**：运行 `$PY analyze.py --text "<原文>"` 获取风险评分和问题列表
+   - 关注 `overall_risk`（0-1）和各段落的 `issues`（具体问题）
+   - `suggestion` 字段给出改写建议
+2. **获取历史建议**：运行 `$PY scripts/rewrite_with_feedback.py suggest <domain> <intensity>` 获取反馈学习建议
+3. 扫描学科关键词 → 读取 `references/domains.md` 对应词汇
+4. **针对性改写**：
+   - 优先解决分析引擎指出的高风险问题（`priority` 最高的段落）
+   - 应用反馈建议：优先使用 `effective_techniques`，保护 `new_terms_to_preserve`
+   - 针对具体 issue 类型改写（见下方"风险类型与改写策略"）
+5. **记录改动**：改写完成后，将每处改动记录为 `changes_made`（格式：`{"type": "技巧类型", "original": "原文片段", "rewritten": "改写片段"}`）
+6. **分析结果**：运行以下 CLI 命令分析并记录会话：
+   ```bash
+   $PY scripts/rewrite_with_feedback.py analyze <原文文件> <改写文件> <学科> <强度>
+   ```
+   输出 JSON 包含：session_id, composite_score, auto_evaluation, hot_sentences, needs_iteration, report
+7. **迭代验证**（自动）：
+   - 如果 `needs_iteration` 为 true：
+     a. 查看 `hot_sentences`，定位需要重点改写的句子
+     b. 使用 `suggested_techniques` 针对性改写这些句子
+     c. 再次运行 analyze 验证（最多 3 轮）
+     d. 如果 3 轮后仍有 fail/warning：返回当前最佳结果，附带 warning 提示"以下句子仍需手动调整"并列出未解决的热点句子
+8. 改写后主动询问满意度，收集反馈
 
 ### 场景2：用户给文件
-1. 运行 `python scripts/document_parser.py <file> [section]` 提取文本
-2. 改写
-3. 运行 `python scripts/similarity_calculator.py original.txt rewritten.txt` 计算相似度
-4. 返回结果 + 相似度报告
-5. 改写后主动询问满意度，收集反馈
+1. 运行 `$PY scripts/document_parser.py <file> [section]` 提取文本
+2. **分析风险**（同场景1步骤1）
+3. **获取历史建议**（同场景1步骤2）
+4. **针对性改写**（同场景1步骤4）— 每段 ≤500 词
+5. **记录改动**（同场景1步骤5）
+6. **分析每段结果**（同场景1步骤6）
+7. **迭代验证**：对 `needs_iteration` 的段落自动迭代改写（最多 3 轮）
+8. 合并结果 + 报告，返回最终结果
+9. 改写后主动询问满意度，收集反馈
 
 ### 场景3：用户反馈
-1. 改写后询问满意度（1-5 分）
-2. 运行 `python scripts/rewrite_with_feedback.py feedback <session_id> <v> <s> <t> <o>` 记录反馈
-3. 系统自动学习，下次改写时应用
+1. 改写后询问满意度（词汇1-5、结构1-5、术语保留1-5、总体1-5）
+2. 运行 `$PY scripts/rewrite_with_feedback.py feedback <session_id> <v> <s> <t> <o>` 记录反馈
+3. 如有缺失术语或建议，一并记录
+4. 系统自动学习，下次改写时应用
 
-### 反馈闭环
-- 每次改写前，先运行 `python scripts/rewrite_with_feedback.py suggest [domain] [intensity]` 获取历史建议
-- 建议包括：推荐技术、强度调整、新术语保护名单
-- 反馈数据存储在 `feedback/sessions/`，学习结果在 `feedback/learning/strategies.json`
+### 反馈闭环（关键）
+每次改写必须遵循：**获取建议 → 应用建议 → 记录改动 → 分析结果 → 收集反馈**
+
+建议的使用方式：
+- `effective_techniques`：成功率 ≥70% 的技巧优先使用
+- `new_terms_to_preserve`：这些词必须原样保留，不改写
+- `intensity_multiplier`：>1.1 时加强改写，<0.9 时减弱改写
+- `preferred_vocabulary`：历史高分替换对，优先采用
+- `domain_issues`：该学科常见问题，避免重复犯错
+
+反馈数据存储在 `feedback/sessions/`，学习结果在 `feedback/learning/strategies.json`
+
+### 风险类型与改写策略
+
+分析引擎会输出具体的风险类型，针对每种类型有对应的改写策略：
+
+| 风险类型 | 含义 | 改写策略 |
+|----------|------|----------|
+| `uniform_sentence_length` | 句长过于均匀 | 制造长短交错：拆长句、合短句 |
+| `excessive_passive` | 被动语态过多 | 主被动交替，关键结果用主动 |
+| `excessive_parallelism` | 并列结构过多 | 拆分并列，用从句/分词替代 |
+| `deep_nesting` | 从句嵌套太深 | 拆分为独立句子 |
+| `low_ttr` | 词汇重复率高 | 同义词替换，丰富用词 |
+| `connector_overuse` | 连接词过多 | 删减多余连接词，用逻辑隐连 |
+| `cliche_detected` | 套话/模板化表达 | 替换为具体/个性化表达 |
+| `too_fluent` | 过于流畅工整 | 加入破折号、括号补充等非正式标记 |
+| `low_burstiness` | 句长变化缺乏突发性 | 制造长短句交替的节奏感 |
+| `no_personal_voice` | 缺少个人表达 | 加入 "we"、"our"、"the authors" |
+| `monotonous_openings` | 句首模式单调 | 变换句首：从句开头、分词开头、there be |
+| `excessive_the` | 冠词 "the" 过度 | 用具体名词替代，减少不必要的 the |
+| `excessive_hedging` | 模糊限定词过多 | 减少 may/might/could，更直接表达 |
+| `excessive_nominalization` | 名词化过度 | 把名词还原为动词（implementation→implement） |
+| `verbose_phrases` | 冗长短语 | 简化（in order to→to, due to the fact that→because） |
+| `uniform_para_length` | 段落长度过于均匀 | 合并短段、拆分长段 |
+| `uniform_para_start` | 段首句模式重复 | 变换段首句开头方式 |
 
 ---
 
@@ -46,6 +100,23 @@ description: |
 2. **每句话至少用2种技巧**
 3. **保持学术正式语体**
 4. **不改变原意**
+
+---
+
+### 章节差异化阈值
+
+不同章节的 composite_score 阈值不同：
+
+| 章节 | 阈值 | 理由 |
+|------|------|------|
+| Abstract | 50 | 摘要是查重重灾区 |
+| Introduction | 60 | 引言容易与文献综述重复 |
+| Methods | 70 | 方法描述常用固定表达 |
+| Results | 60 | 结果描述相对客观 |
+| Discussion | 50 | 讨论容易与已有研究重复 |
+| Conclusion | 60 | 结论常用套话 |
+
+超过阈值时应继续迭代改写。
 
 ---
 
@@ -151,7 +222,7 @@ description: |
 ## 检查清单
 
 返回前必须检查：
-- [ ] 连续词：有没有连续5个词和原文相同？
+- [ ] 连续词：有没有连续8个词和原文相同？（Turnitin 阈值）
 - [ ] 术语：专业术语是否保留？
 - [ ] 引用：引用格式是否完整？
 - [ ] 公式：公式是否原样保留？
@@ -159,6 +230,7 @@ description: |
 - [ ] 语法：语法是否正确？
 - [ ] 流畅：读起来是否通顺？
 - [ ] 学术：是否保持学术正式语体？
+- [ ] 迭代：needs_iteration 是否已处理？
 
 ---
 
