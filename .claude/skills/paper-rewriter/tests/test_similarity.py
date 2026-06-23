@@ -70,3 +70,55 @@ class TestStopwords:
         """空列表应返回空列表"""
         from similarity_calculator import _filter_stopwords
         assert _filter_stopwords([]) == []
+
+
+class TestSentenceLevelMatches:
+    """测试句子级热点定位"""
+
+    def test_sentence_level_matches(self):
+        """相似句子应被定位"""
+        from similarity_calculator import find_sentence_level_matches
+        orig = "The method is effective. The results show improvement. We analyzed the data."
+        rew = "The approach is effective. The findings demonstrate improvement. The data was analyzed."
+        matches = find_sentence_level_matches(orig, rew, threshold=0.3)
+        assert len(matches) > 0
+        assert "original_sentence" in matches[0]
+        assert "rewritten_sentence" in matches[0]
+        assert "similarity_score" in matches[0]
+
+    def test_sentence_level_no_match(self):
+        """完全不同的句子应返回空"""
+        from similarity_calculator import find_sentence_level_matches
+        orig = "The method is effective."
+        rew = "An entirely different approach was utilized for this investigation."
+        matches = find_sentence_level_matches(orig, rew, threshold=0.8)
+        assert len(matches) == 0
+
+    def test_sentence_level_suggested_techniques(self):
+        """热点句子应推荐技巧"""
+        from similarity_calculator import find_sentence_level_matches
+        orig = "The results show that the method is effective for this problem"
+        rew = "The results show that the method is effective for this issue"
+        matches = find_sentence_level_matches(orig, rew, threshold=0.3)
+        if matches:
+            assert "suggested_techniques" in matches[0]
+
+
+class TestContentWordOverlap:
+    """测试实词重叠率"""
+
+    def test_content_word_overlap(self):
+        """停用词过滤后的实词重叠率应低于总重叠率"""
+        from similarity_calculator import calculate_similarity
+        orig = "The method is effective for this problem"
+        rew = "The approach is useful for this issue"
+        result = calculate_similarity(orig, rew)
+        assert "content_word_overlap" in result
+        assert "token_mode" in result
+        assert result["content_word_overlap"] <= result["vocabulary_overlap"]
+
+    def test_token_mode_field(self):
+        """返回值应包含 token_mode"""
+        from similarity_calculator import calculate_similarity
+        result = calculate_similarity("The method is effective", "The approach works well")
+        assert result["token_mode"] in ("word", "regex")

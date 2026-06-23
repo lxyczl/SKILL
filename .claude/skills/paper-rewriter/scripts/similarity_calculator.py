@@ -66,6 +66,97 @@ def _regex_tokenize(text: str) -> list[str]:
     return re.findall(r'\b[a-z]+\b', text.lower())
 
 
+def find_sentence_level_matches(
+    original: str,
+    rewritten: str,
+    threshold: float = 0.5
+) -> list[dict]:
+    """
+    逐句对比，返回相似度超过阈值的句子对。
+
+    Args:
+        original: 原文
+        rewritten: 改写文本
+        threshold: 相似度阈值（0-1）
+
+    Returns:
+        [{original_sentence, rewritten_sentence, similarity_score, max_consecutive, suggested_techniques}, ...]
+    """
+    # 导入分句函数
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from analyzer.syntax import split_sentences
+
+    orig_sents = split_sentences(original)
+    rew_sents = split_sentences(rewritten)
+
+    if not orig_sents or not rew_sents:
+        return []
+
+    matches = []
+    used_rew = set()
+
+    for orig_sent in orig_sents:
+        best_score = 0.0
+        best_rew_idx = -1
+        tok_orig = tokenize(orig_sent)
+
+        for j, rew_sent in enumerate(rew_sents):
+            if j in used_rew:
+                continue
+            tok_rew = tokenize(rew_sent)
+            if not tok_orig or not tok_rew:
+                continue
+
+            # 计算句子级 composite score（归一化到 0-1）
+            lcs = lcs_ratio(tok_orig, tok_rew)
+            tg_prec = ngram_precision(tok_orig, tok_rew, 3)
+            bg_prec = ngram_precision(tok_orig, tok_rew, 2)
+            vocab_ovl = vocabulary_overlap(tok_orig, tok_rew)
+            consec = find_consecutive_matches(tok_orig, tok_rew, min_length=3)
+            max_consec = max((m["length"] for m in consec), default=0)
+
+            score = (
+                lcs * 25 +
+                tg_prec * 30 +
+                bg_prec * 20 +
+                vocab_ovl * 15 +
+                min(max_consec / 10, 1.0) * 10
+            ) / 100.0
+
+            if score > best_score:
+                best_score = score
+                best_rew_idx = j
+
+        if best_score >= threshold and best_rew_idx >= 0:
+            used_rew.add(best_rew_idx)
+            tok_orig = tokenize(orig_sent)
+            tok_rew = tokenize(rew_sents[best_rew_idx])
+            consec = find_consecutive_matches(tok_orig, tok_rew, min_length=3)
+            max_consec = max((m["length"] for m in consec), default=0)
+
+            # 推荐技巧
+            tg = ngram_precision(tok_orig, tok_rew, 3)
+            if max_consec >= 8:
+                techniques = ["voice_conversion", "clause_insertion", "word_order_change"]
+            elif max_consec >= 5:
+                techniques = ["voice_conversion", "synonym_replacement"]
+            elif tg >= 0.30:
+                techniques = ["synonym_replacement", "word_order_change"]
+            else:
+                techniques = ["synonym_replacement"]
+
+            matches.append({
+                "original_sentence": orig_sent,
+                "rewritten_sentence": rew_sents[best_rew_idx],
+                "similarity_score": round(best_score, 3),
+                "max_consecutive": max_consec,
+                "suggested_techniques": techniques,
+            })
+
+    return matches
+
+
 def ngrams(tokens: list[str], n: int) -> list[tuple]:
     """生成 n-gram"""
     return [tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]
@@ -223,8 +314,16 @@ def calculate_similarity(original: str, rewritten: str) -> dict:
         consecutive_matches: 所有超长连续匹配详情
         original_word_count / rewritten_word_count: 词数
     """
-    tok_orig = tokenize(original)
-    tok_rew = tokenize(rewritten)
+    # 尝试词级分词
+    tok_orig = tokenize(original, mode="word")
+    tok_rew = tokenize(rewritten, mode="word")
+    token_mode = "word"
+
+    # 如果词级分词结果太少（<3 个 token），降级到正则
+    if len(tok_orig) < 3 or len(tok_rew) < 3:
+        tok_orig = _regex_tokenize(original)
+        tok_rew = _regex_tokenize(rewritten)
+        token_mode = "regex"
 
     # LCS
     lcs = lcs_ratio(tok_orig, tok_rew)
@@ -237,6 +336,11 @@ def calculate_similarity(original: str, rewritten: str) -> dict:
 
     # 词汇重叠
     vocab_ovl = vocabulary_overlap(tok_orig, tok_rew)
+
+    # 实词重叠（过滤停用词后）
+    content_orig = _filter_stopwords(tok_orig)
+    content_rew = _filter_stopwords(tok_rew)
+    content_ovl = vocabulary_overlap(content_orig, content_rew) if content_orig and content_rew else 0.0
 
     # 连续匹配
     consec = find_consecutive_matches(tok_orig, tok_rew, min_length=4)
@@ -265,6 +369,8 @@ def calculate_similarity(original: str, rewritten: str) -> dict:
         "consecutive_matches": consec,
         "original_word_count": len(tok_orig),
         "rewritten_word_count": len(tok_rew),
+        "token_mode": token_mode,
+        "content_word_overlap": round(content_ovl, 3),
     }
 
 
