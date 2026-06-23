@@ -140,6 +140,101 @@ def test_problem_patterns_recorded(tmp_path):
     assert fs.strategies["problem_patterns"][0]["section"] == "discussion"
 
 
+class TestTargetedAdvice:
+    """测试针对性建议"""
+
+    def test_targeted_advice_on_failure(self, tmp_path):
+        """失败时应生成针对性建议"""
+        fs = FeedbackSystem(tmp_path)
+        suggestions = fs.get_rewrite_suggestions("body", "medium", current_metrics={
+            "failure_type": "cliche_persistent"
+        })
+        assert len(suggestions["targeted_advice"]) > 0
+        assert len(suggestions["priority_techniques"]) > 0
+
+    def test_targeted_advice_from_history(self, tmp_path):
+        """历史问题应生成建议"""
+        fs = FeedbackSystem(tmp_path)
+        fs.strategies["problem_patterns"] = [
+            {"section": "body", "failure_type": "risk_increased",
+             "risk_before": 0.5, "risk_after": 0.6}
+        ]
+        fs._save_strategies()
+        suggestions = fs.get_rewrite_suggestions("body", "medium")
+        assert len(suggestions["targeted_advice"]) > 0
+
+    def test_no_targeted_advice_when_success(self, tmp_path):
+        """成功时不应有针对失败的建议"""
+        fs = FeedbackSystem(tmp_path)
+        suggestions = fs.get_rewrite_suggestions("body", "medium", current_metrics={
+            "failure_type": "none"
+        })
+        assert len(suggestions["targeted_advice"]) == 0
+
+    def test_priority_techniques_for_cliche(self, tmp_path):
+        """cliche_persistent 应推荐 cliche_replace"""
+        fs = FeedbackSystem(tmp_path)
+        suggestions = fs.get_rewrite_suggestions("body", "medium", current_metrics={
+            "failure_type": "cliche_persistent"
+        })
+        assert "cliche_replace" in suggestions["priority_techniques"]
+
+    def test_priority_techniques_for_pattern(self, tmp_path):
+        """pattern_persistent 应推荐 sentence_restructure"""
+        fs = FeedbackSystem(tmp_path)
+        suggestions = fs.get_rewrite_suggestions("body", "medium", current_metrics={
+            "failure_type": "pattern_persistent"
+        })
+        assert "sentence_restructure" in suggestions["priority_techniques"]
+
+
+class TestEffectiveCombinations:
+    """测试有效技巧组合"""
+
+    def test_effective_combinations_in_suggestions(self, tmp_path):
+        """高成功率组合应出现在建议中"""
+        fs = FeedbackSystem(tmp_path)
+        fs.strategies["technique_combinations"] = {
+            "cliche_replace+connector_replace": {"success": 5, "total": 5}
+        }
+        fs._save_strategies()
+        suggestions = fs.get_rewrite_suggestions("body", "medium")
+        assert len(suggestions["effective_combinations"]) > 0
+        assert suggestions["effective_combinations"][0]["combination"] == "cliche_replace+connector_replace"
+        assert suggestions["effective_combinations"][0]["success_rate"] == 1.0
+
+    def test_low_rate_excluded(self, tmp_path):
+        """低成功率组合不应出现"""
+        fs = FeedbackSystem(tmp_path)
+        fs.strategies["technique_combinations"] = {
+            "cliche_replace+connector_replace": {"success": 1, "total": 5}
+        }
+        fs._save_strategies()
+        suggestions = fs.get_rewrite_suggestions("body", "medium")
+        assert len(suggestions["effective_combinations"]) == 0
+
+    def test_low_total_excluded(self, tmp_path):
+        """总次数不足的组合不应出现"""
+        fs = FeedbackSystem(tmp_path)
+        fs.strategies["technique_combinations"] = {
+            "cliche_replace+connector_replace": {"success": 1, "total": 1}
+        }
+        fs._save_strategies()
+        suggestions = fs.get_rewrite_suggestions("body", "medium")
+        assert len(suggestions["effective_combinations"]) == 0
+
+
+class TestIssuesRemainFailure:
+    """测试 issues_remain 失败类型"""
+
+    def test_issues_remain_generic(self):
+        """非特定 issue 类型残留应返回 issues_remain"""
+        from feedback_system import classify_failure
+        issues_before = [{"type": "low_ttr"}]
+        issues_after = [{"type": "low_ttr"}]
+        assert classify_failure(0.8, 0.5, issues_before, issues_after) == "issues_remain"
+
+
 class TestAutoEvaluate:
     """测试自动评估"""
 
