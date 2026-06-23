@@ -165,6 +165,9 @@ class FeedbackSystem:
         section_type: str = "body",
         techniques_used: Optional[list] = None,
         issues_resolved: Optional[list] = None,
+        issues_before: Optional[list] = None,
+        issues_after: Optional[list] = None,
+        intensity: str = "medium",
     ) -> dict:
         """记录一次改写会话。
 
@@ -176,6 +179,9 @@ class FeedbackSystem:
             section_type: 章节类型
             techniques_used: 使用的改写技巧列表
             issues_resolved: 解决的 issue type 列表
+            issues_before: 改写前检测到的 issue 列表（用于失败分类）
+            issues_after: 改写后残留的 issue 列表（用于失败分类）
+            intensity: 改写强度级别（light/medium/heavy）
 
         Returns:
             会话信息 dict
@@ -196,6 +202,9 @@ class FeedbackSystem:
             "success": success,
             "techniques_used": techniques_used or [],
             "issues_resolved": issues_resolved or [],
+            "issues_before": issues_before or [],
+            "issues_after": issues_after or [],
+            "intensity": intensity,
         }
 
         session_file = self.sessions_dir / f"{session_id}.json"
