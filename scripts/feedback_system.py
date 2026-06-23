@@ -89,7 +89,7 @@ class FeedbackSystem:
 
     def __init__(self, skill_dir: Optional[Path] = None):
         if skill_dir is None:
-            skill_dir = Path(__file__).parent
+            skill_dir = Path(__file__).parent.parent
 
         self.skill_dir = skill_dir
         self.feedback_dir = skill_dir / "feedback"
@@ -188,7 +188,16 @@ class FeedbackSystem:
         """
         session_id = f"{datetime.now().strftime('%Y-%m-%d')}-{uuid.uuid4().hex[:8]}"
         risk_reduction = round(risk_before - risk_after, 3)
-        success = risk_after < risk_before
+
+        # 自动评估
+        eval_result = auto_evaluate(risk_before, risk_after)
+        success = eval_result["is_success"]
+
+        # 失败分类
+        failure_type = classify_failure(
+            risk_before, risk_after,
+            issues_before or [], issues_after or [],
+        ) if not success else None
 
         session = {
             "session_id": session_id,
@@ -200,6 +209,8 @@ class FeedbackSystem:
             "risk_after": risk_after,
             "risk_reduction": risk_reduction,
             "success": success,
+            "auto_evaluation": eval_result,
+            "failure_type": failure_type,
             "techniques_used": techniques_used or [],
             "issues_resolved": issues_resolved or [],
             "issues_before": issues_before or [],

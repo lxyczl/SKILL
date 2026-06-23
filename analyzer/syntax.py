@@ -3,12 +3,17 @@
 import re
 import statistics
 
-from utils.text import split_sentences
+
+def _split_sentences(text: str) -> list[str]:
+    """按中文标点分句。"""
+    pattern = r'([^。！？；.!?;]+[。！？；.!?;]?)'
+    sentences = re.findall(pattern, text)
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def analyze_syntax(text: str) -> dict:
     """分析句法特征，返回风险分和问题列表。"""
-    sentences = split_sentences(text)
+    sentences = _split_sentences(text)
     if len(sentences) < 2:
         return {"score": 0.0, "issues": []}
 

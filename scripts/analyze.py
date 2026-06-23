@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # 确保从任意目录调用时都能找到 analyzer 包
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analyzer.paragraphs import split_paragraphs
 from analyzer.scorer import score_paragraphs, compute_overall_risk, get_threshold
@@ -166,7 +166,7 @@ def main():
     args = parser.parse_args()
 
     # 默认模式库路径
-    default_patterns = Path(__file__).resolve().parent / "patterns"
+    default_patterns = Path(__file__).resolve().parent.parent / "patterns"
     patterns_dir = Path(args.patterns) if args.patterns else default_patterns
 
     # --learn-success 模式：记录成功改写策略

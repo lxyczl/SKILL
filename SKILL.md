@@ -20,22 +20,60 @@ description: 中文论文降 AIGC 率处理工具
 
 ## 第二步：调用分析引擎
 
-分析脚本位于 `.claude/skills/AIGC-rewriter-zh/analyze.py`，通过 Bash 工具调用：
+### Pipeline 入口（推荐）
+
+统一 pipeline 脚本位于 `run_pipeline.py`，整合了分析、相似度计算、参考文档、反馈系统：
+
+```bash
+# 分析模式：分析原文风险 + 生成改写建议
+$PY .claude/skills/AIGC-rewriter-zh/scripts/run_pipeline.py analyze 文件路径
+$PY .claude/skills/AIGC-rewriter-zh/scripts/run_pipeline.py analyze --text "要分析的文本"
+$PY .claude/skills/AIGC-rewriter-zh/scripts/run_pipeline.py analyze 文件路径 --platform cnki --threshold 0.2
+
+# 验证模式：对比原文与改写文，输出相似度 + 风险变化 + 反馈记录
+$PY .claude/skills/AIGC-rewriter-zh/scripts/run_pipeline.py verify 原文文件 改写文件
+$PY .claude/skills/AIGC-rewriter-zh/scripts/run_pipeline.py verify 原文文件 改写文件 --section body --techniques cliche_replace connector_replace --intensity medium
+```
+
+**analyze 模式输出**（JSON 到 stderr，可读报告到 stdout）：
+- `overall_risk`: 全文风险分
+- `paragraphs`: 各段落风险 + issues + 可用替换词 + 保护术语
+- `preserve_terms`: 文中出现的保护术语
+- `domain_replacements`: 学科替换词
+- `synonym_suggestions`: 通用同义词
+- `feedback_suggestions`: 历史有效技巧
+
+**verify 模式输出**：
+- `similarity`: 相似度指标（unigram/bigram/trigram 重叠率、最长连续匹配）
+- `hotspot_sentences`: 高相似度句子 + 推荐技巧
+- `risk_before` / `risk_after` / `risk_reduction`: 风险变化
+- `verdict`: 自动评估（excellent/success/partial/marginal/fail）
+- `failure_type`: 失败分类（如有）
+
+### 参考文档
+
+`references/` 目录包含学科词汇和同义词表：
+- `domains.md`: 19 个学科的专业术语（不可替换）和替换词
+- `synonyms.md`: 通用学术同义词（动词、名词、形容词、副词、连接词）
+
+pipeline 会自动加载这些文档，在 analyze 输出中提供 `preserve_terms` 和 `available_replacements`。
+
+### 单独脚本（向后兼容）
 
 ```bash
 # 分析
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py --text "要分析的文本"
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py 文件路径
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py 文件路径 --threshold 0.2
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py 文件路径 --platform cnki
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --text "要分析的文本"
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py 文件路径
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py 文件路径 --threshold 0.2
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py 文件路径 --platform cnki
 
 # 反馈学习
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py suggest --section body --intensity medium
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py record --original "原文" --rewritten "改写" --risk-before 0.8 --risk-after 0.2 --section body --techniques cliche_replace --issues cliche_detected
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py vocab --original "综上所述" --rewritten "从整体来看"
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py report
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py --learn-stubborn data.json
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py --learn-success data.json
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py suggest --section body --intensity medium
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py record --original "原文" --rewritten "改写" --risk-before 0.8 --risk-after 0.2 --section body --techniques cliche_replace --issues cliche_detected
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py vocab --original "综上所述" --rewritten "从整体来看"
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py report
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --learn-stubborn data.json
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --learn-success data.json
 ```
 
 返回 JSON 格式：
@@ -62,7 +100,7 @@ $PY .claude/skills/AIGC-rewriter-zh/analyze.py --learn-success data.json
 每次改写前，获取历史建议：
 
 ```bash
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py suggest --section 讨论 --intensity medium
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py suggest --section 讨论 --intensity medium
 ```
 
 返回的建议包含：
@@ -153,7 +191,7 @@ $PY -c "import json; d=json.load(open('.claude/skills/AIGC-rewriter-zh/patterns/
 **1. 记录改写会话**（无论成功失败）：
 
 ```bash
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py record \
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py record \
   --original "原文" --rewritten "改写后" \
   --risk-before 0.8 --risk-after 0.2 \
   --section body \
@@ -172,7 +210,7 @@ import json, sys
 data = {'original': sys.argv[1], 'rewritten': sys.argv[2], 'risk_before': float(sys.argv[3]), 'risk_after': float(sys.argv[4])}
 open('tmp_learn.json','w',encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
 " "原文" "改写后" 0.8 0.2
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py --learn-success tmp_learn.json
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --learn-success tmp_learn.json
 ```
 
 **3. 改写失败** → 记录顽固 pattern：
@@ -183,13 +221,13 @@ import json, sys
 data = {'original': sys.argv[1], 'rewritten': sys.argv[2]}
 open('tmp_learn.json','w',encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
 " "原文" "改写后"
-$PY .claude/skills/AIGC-rewriter-zh/analyze.py --learn-stubborn tmp_learn.json
+$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --learn-stubborn tmp_learn.json
 ```
 
 **4. 全部改写完成后**，输出策略报告：
 
 ```bash
-$PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py report
+$PY .claude/skills/AIGC-rewriter-zh/scripts/feedback_cli.py report
 ```
 
 这些经验会在下次改写时被自动加载，帮助选择更有效的策略。
@@ -200,7 +238,7 @@ $PY .claude/skills/AIGC-rewriter-zh/feedback_cli.py report
 
 1. 输出：`请粘贴需要处理的段落。`
 2. 等待用户输入
-3. 收到文本后，调用分析引擎：`$PY .claude/skills/AIGC-rewriter-zh/analyze.py --text "用户文本"`
+3. 收到文本后，调用分析引擎：`$PY .claude/skills/AIGC-rewriter-zh/scripts/analyze.py --text "用户文本"`
 4. 根据分析结果执行改写
 5. 输出：改写结果 + 风险分变化（原文 X.XX → 改写后 X.XX）
 6. 等待下一段落或指令

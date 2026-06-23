@@ -1,13 +1,19 @@
 """AI 痕迹检测维度。"""
 
 import re
-from utils.text import split_sentences
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按中文标点分句。"""
+    pattern = r'([^。！？；.!?;]+[。！？；.!?;]?)'
+    sentences = re.findall(pattern, text)
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def analyze_ai_traces(text: str) -> dict:
     """检测 AI 生成痕迹，返回风险分和问题列表。"""
     issues = []
-    sentences = split_sentences(text)
+    sentences = _split_sentences(text)
 
     # 1. 流畅度异常 — 缺乏口语化断句
     # AI 文本通常句句完整，缺少省略号、破折号等不完整标记

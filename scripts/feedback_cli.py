@@ -8,8 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+# feedback_system 在同目录，无需额外 sys.path
 from feedback_system import FeedbackSystem
 
 
