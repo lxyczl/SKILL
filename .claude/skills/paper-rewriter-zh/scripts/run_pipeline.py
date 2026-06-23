@@ -3,12 +3,15 @@
 用法：
   $PY run_pipeline.py <原文文件> <改写文件> [学科] [强度] [--project <项目目录>]
   $PY run_pipeline.py --stdin [学科] [强度]  (从 stdin 读取 JSON: {"original": "...", "rewritten": "..."})
+  $PY run_pipeline.py --cnki <知网报告HTML> <改写文件> [学科] [强度]  (解析知网报告)
+  $PY run_pipeline.py --doc <Word/PDF文件> [学科] [强度]  (解析文档)
 """
 import sys
 import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from edge_cases import detect_edge_cases, should_skip_rewrite, format_edge_case_report
 from reference_loader import load_domains, load_synonyms, get_domain_preserve_terms, get_domain_replacements, get_synonym_suggestions
@@ -89,6 +92,10 @@ def run(original: str, rewritten: str, domain: str = "通用",
     domain_replacements = get_domain_replacements(original, domains, domain)
     synonym_suggestions = get_synonym_suggestions(original, synonyms)
 
+    # 风险分析引擎
+    from analyzer.scorer import analyze_text
+    risk_analysis = analyze_text(original)
+
     # 自动学习
     learn_result = fs.auto_learn(session["session_id"])
 
@@ -110,6 +117,7 @@ def run(original: str, rewritten: str, domain: str = "通用",
         "preserve_terms": preserve_terms,
         "domain_replacements": domain_replacements,
         "synonym_suggestions": synonym_suggestions,
+        "risk_analysis": risk_analysis,
     }
 
 
@@ -145,6 +153,21 @@ def format_output(result: dict) -> str:
     if result.get("skip_rewrite"):
         lines.append(">>> 跳过改写（见上方边界情况） <<<")
         return "\n".join(lines)
+
+    # 知网报告数据（如果有）
+    cnki = result.get("cnki_report")
+    if cnki and cnki.get("total_similarity") is not None:
+        lines.append(f"## 知网查重: {cnki['total_similarity']}%")
+        stats = cnki.get("stats", {})
+        lines.append(f"   标红片段: {stats.get('red_fragment_count', 0)} 个")
+        lines.append(f"   重复字数: {stats.get('total_red_chars', 0)} 字")
+        lines.append("")
+
+    # 文档信息（如果有）
+    doc = result.get("doc_info")
+    if doc:
+        lines.append(f"## 文档: {doc.get('file', '未知')} ({doc.get('chars', 0)} 字)")
+        lines.append("")
 
     lines.append(f"## 评估: {ev['verdict'].upper()} ({ev['score']}/100)")
     lines.append(f"   {ev['reason']}")
@@ -202,6 +225,18 @@ def format_output(result: dict) -> str:
             lines.append(f"   {src} → {', '.join(targets[:4])}")
         lines.append("")
 
+    # 风险分析
+    risk = result.get("risk_analysis", {})
+    if risk and risk.get("overall_risk", 0) > 0:
+        lines.append(f"## 风险分析 (综合风险: {risk['overall_risk']:.2f})")
+        for ps in risk.get("paragraph_scores", [])[:3]:
+            issues = ps.get("issues", [])
+            issue_types = [i["detail"] for i in issues[:2]]
+            lines.append(f"   段落{ps.get('index', '?')}: 风险={ps['risk']:.2f}, {ps.get('suggestion', '')}")
+            for detail in issue_types:
+                lines.append(f"      - {detail}")
+        lines.append("")
+
     if result["needs_iteration"]:
         lines.append(">>> 需要迭代改写热点句子 <<<")
     else:
@@ -215,14 +250,8 @@ def format_output(result: dict) -> str:
 
 # ── CLI ───────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
-
-    if not args or args[0] in ("-h", "--help"):
-        print(__doc__)
-        sys.exit(0)
-
-    # 解析 --project
+def _parse_common_args(args: list) -> tuple:
+    """解析通用参数：--project, domain, intensity"""
     project_dir = None
     if "--project" in args:
         idx = args.index("--project")
@@ -232,11 +261,32 @@ if __name__ == "__main__":
         else:
             print("错误: --project 需要目录参数")
             sys.exit(1)
+    return args, project_dir
 
+
+def _read_file(path: Path) -> str:
+    """读取文件，自动处理编码"""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="gbk")
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
+
+    args, project_dir = _parse_common_args(args)
     domain = "通用"
     intensity = "中度"
+    cnki_report_data = None
+    doc_info = None
 
     if args[0] == "--stdin":
+        # 从 stdin 读取 JSON
         data = json.loads(sys.stdin.read())
         original = data["original"]
         rewritten = data["rewritten"]
@@ -244,29 +294,107 @@ if __name__ == "__main__":
             domain = args[1]
         if len(args) > 2:
             intensity = args[2]
+
+    elif args[0] == "--cnki":
+        # 知网报告模式：--cnki <报告HTML> <改写文件> [学科] [强度]
+        from cnki_parser import parse_cnki_report, format_cnki_report, extract_hotspots_from_report
+
+        if len(args) < 3:
+            print("错误: --cnki 需要报告文件和改写文件")
+            print("用法: $PY run_pipeline.py --cnki <知网报告HTML> <改写文件> [学科] [强度]")
+            sys.exit(1)
+
+        cnki_file = Path(args[1])
+        rew_file = Path(args[2])
+
+        if not cnki_file.exists():
+            print(f"错误: 知网报告文件不存在: {cnki_file}")
+            sys.exit(1)
+        if not rew_file.exists():
+            print(f"错误: 改写文件不存在: {rew_file}")
+            sys.exit(1)
+
+        # 解析知网报告
+        cnki_report_data = parse_cnki_report(str(cnki_file))
+        if "error" in cnki_report_data:
+            print(f"错误: {cnki_report_data['error']}")
+            sys.exit(1)
+
+        print(format_cnki_report(cnki_report_data))
+        print("\n" + "=" * 60 + "\n")
+
+        # 提取原文（从报告的标红片段重建）和改写文
+        # 注意：知网报告可能不包含完整原文，这里用改写文做对比
+        rewritten = _read_file(rew_file)
+
+        # 如果有标红片段，用它们作为原文参考
+        if cnki_report_data.get("red_fragments"):
+            original = "\n".join(cnki_report_data["red_fragments"])
+        else:
+            print("警告: 未能从报告提取重复片段，请手动提供原文")
+            sys.exit(1)
+
+        if len(args) > 3:
+            domain = args[3]
+        if len(args) > 4:
+            intensity = args[4]
+
+    elif args[0] == "--doc":
+        # 文档模式：--doc <Word/PDF文件> [学科] [强度]
+        from doc_parser import parse_document, clean_extracted_text
+
+        if len(args) < 2:
+            print("错误: --doc 需要文件路径")
+            print("用法: $PY run_pipeline.py --doc <Word/PDF文件> [学科] [强度]")
+            sys.exit(1)
+
+        doc_file = Path(args[1])
+        if not doc_file.exists():
+            print(f"错误: 文件不存在: {doc_file}")
+            sys.exit(1)
+
+        original = parse_document(str(doc_file))
+        original = clean_extracted_text(original)
+        doc_info = {"file": str(doc_file), "chars": len(original)}
+
+        print(f"文档解析: {doc_file.name} ({len(original)} 字)")
+        print("=" * 60 + "\n")
+
+        # 文档模式需要配合改写文，提示用户
+        print("注意: 文档模式仅解析原文。请继续提供改写文进行对比分析。")
+        print("用法: 将解析结果通过 --stdin 传入，或先保存为 txt 再对比。")
+        print("\n提取的原文已输出，请复制使用。")
+        sys.exit(0)
+
     else:
+        # 标准模式：<原文文件> <改写文件> [学科] [强度]
         if len(args) < 2:
             print("错误: 需要原文文件和改写文件")
+            print("用法: $PY run_pipeline.py <原文文件> <改写文件> [学科] [强度]")
+            print("      $PY run_pipeline.py --cnki <知网报告> <改写文件> [学科] [强度]")
+            print("      $PY run_pipeline.py --doc <Word/PDF文件> [学科] [强度]")
             sys.exit(1)
         orig_file, rew_file = Path(args[0]), Path(args[1])
         for fpath, label in [(orig_file, "原文"), (rew_file, "改写文")]:
             if not fpath.exists():
                 print(f"错误: {label}文件不存在: {fpath}")
                 sys.exit(1)
-        try:
-            original = orig_file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            original = orig_file.read_text(encoding="gbk")
-        try:
-            rewritten = rew_file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            rewritten = rew_file.read_text(encoding="gbk")
+        original = _read_file(orig_file)
+        rewritten = _read_file(rew_file)
         if len(args) > 2:
             domain = args[2]
         if len(args) > 3:
             intensity = args[3]
 
     result = run(original, rewritten, domain, intensity, project_dir)
+
+    # 附加知网报告数据
+    if cnki_report_data:
+        result["cnki_report"] = cnki_report_data
+
+    # 附加文档信息
+    if doc_info:
+        result["doc_info"] = doc_info
 
     # 输出简洁报告
     print(format_output(result))
@@ -280,4 +408,7 @@ if __name__ == "__main__":
         "hot_count": len(result["hot_sentences"]),
         "jieba": result["jieba"],
     }
+    if cnki_report_data:
+        json_output["cnki_similarity"] = cnki_report_data.get("total_similarity")
+        json_output["cnki_red_count"] = cnki_report_data.get("stats", {}).get("red_fragment_count", 0)
     print(f"\n[JSON] {json.dumps(json_output, ensure_ascii=False)}", file=sys.stderr)

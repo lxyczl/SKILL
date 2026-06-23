@@ -11,110 +11,73 @@ description: |
 
 # 中文学术论文降重
 
-## 快速流程（每次改写必须遵循）
+## 快速流程
 
-```
+```bash
+# 标准：原文 + 改写文对比
 $PY scripts/run_pipeline.py <原文> <改写文> [学科] [强度]
+
+# 知网报告：解析查重报告 + 改写文对比
+$PY scripts/run_pipeline.py --cnki <知网报告.html> <改写文> [学科] [强度]
+
+# 文档解析：Word/PDF 提取纯文本
+$PY scripts/run_pipeline.py --doc <论文.docx>
+
+# 独立风险分析（不改写）
+$PY scripts/analyze.py <文本文件>
 ```
 
-pipeline 自动完成：相似度分析 → 句级热点定位 → 自动评估 → 迭代判断。
+pipeline 自动完成：相似度分析 → 风险分析 → 句级热点定位 → 自动评估 → 迭代判断。
 
 ### 操作步骤
 
-1. **用户提供原文和改写文**（文件或直接粘贴）
+1. **获取文本**：文件路径、粘贴、Word/PDF（`--doc`）、知网报告（`--cnki`）
 2. **运行 pipeline**，获取评估结果
-3. **如果 `needs_iteration` 为 true**：对 hot_sentences 逐句改写，然后再次运行 pipeline（最多 3 轮）
+3. **如果 `needs_iteration` 为 true**：对 hot_sentences 逐句改写，再次运行（最多 3 轮）
 4. **如果达标**：输出最终报告
 
-### pipeline 输出说明
+### pipeline 输出
 
 - `verdict`: excellent / success / warning / fail
-- `hot_sentences`: 需要重点改写的句子，附带推荐技巧
+- `hot_sentences`: 需重点改写的句子 + 推荐技巧
 - `needs_iteration`: true 时必须继续改写
-- `suggestions`: 历史有效技巧和针对性建议
+- `risk_analysis`: 三维度风险（句法25% / 词汇35% / AI痕迹40%）
+- `preserve_terms`: 从 `references/domains.md` 提取的术语
+- `synonym_suggestions`: 从 `references/synonyms.md` 提取的替换建议
 
-### 知网查重规则
+### 知网规则
 
 - 连续 13 字相同 = 抄袭（必须打破）
 - 三元组重叠率 ≥ 20% = 风险
 
-## 改写规则
+## 改写技巧
 
-### 通用技巧
+pipeline 会根据指标自动推荐，从以下技巧中选择：
 
-改写时从以下技巧中选择（pipeline 会根据指标推荐）：
+- **句式重组** / **主被动转换** / **拆分长句** / **合并短句**
+- **同义词替换** / **调整语序** / **增加修饰语** / **删除冗余**
+- **因果倒置** / **条件重组**
+- **四字词语重组** / **文言成分替换** / **把被字句转换**
 
-- **句式重组**：打散原句结构，重新组织
-- **主被动转换**：主动句 ↔ 被动句
-- **拆分长句**：一个长句拆成两个短句
-- **合并短句**：多个短句合并成一个
-- **同义词替换**：用近义词替换关键词
-- **调整语序**：改变句子成分的顺序
-- **增加修饰语**：添加限定词、状语等
-- **删除冗余**：去掉不必要的重复
-- **因果倒置**：先说结果再说原因
-- **条件重组**：重新组织条件关系
+## 核心约束
 
-### 中文特色技巧
-
-- **四字词语重组**：拆解四字成语/固定搭配
-- **文言成分替换**：将"之"替换为"的"等
-- **把字句/被字句转换**：句式变换
-- **量词替换**：更换量词
-- **并列结构重组**：调整并列成分的顺序
-
-### 核心约束
-
-- 改写后保留原文学术含义
-- 不编造、不添加原文没有的内容
-- 专业术语必须保留
-- 语句通顺、符合学术写作规范
-- 不使用口语化表达
-
-## 场景示例
-
-### 场景 1：用户发来一段文本
-
-```
-用户：帮我降重这段话（原文）...
-```
-
-1. 把用户给的文本作为原文，先用 pipeline 分析
-2. 如果用户已提供改写文，直接用 pipeline 对比分析
-3. 如果用户只给了原文，先改写再分析
-4. 根据 hot_sentences 迭代优化
-
-### 场景 2：用户发来两个文件
-
-```
-用户：原文在 original.txt，改写在 rewritten.txt
-```
-
-1. 运行 `$PY scripts/run_pipeline.py original.txt rewritten.txt [学科]`
-2. 根据结果决定是否需要迭代
-
-### 场景 3：用户要求批量处理
-
-逐段运行 pipeline，逐段优化，确保每段都达标。
+- 保留学术含义，不编造内容
+- 专业术语必须保留（`references/domains.md`）
+- 语句通顺，符合学术规范，不用口语
 
 ## 项目级数据存储
 
-pipeline 默认将反馈数据存在当前项目目录的 `.paper-rewriter/` 下（而非 skill 目录）。这意味着：
-- 每个项目的改写历史独立
-- 反馈学习数据随项目持久化
-- 可用 `--project <目录>` 指定项目根目录
+反馈数据存在项目目录 `.paper-rewriter/` 下，用 `--project <目录>` 指定项目根目录。
 
-## 进阶：手动控制（可选）
+## 文档解析依赖
 
-如果需要更细粒度的控制，可以直接调用底层脚本：
+- Word: `uv pip install python-docx`
+- PDF: `uv pip install PyMuPDF`
+
+## 进阶（可选）
 
 ```bash
-# 获取建议
-$PY scripts/rewrite_with_feedback.py suggest <学科> <强度>
-
-# 分析改写（不记录会话）
-$PY scripts/similarity_calculator.py <原文> <改写文>
-
-# 查看策略报告
-$PY scripts/rewrite_with_feedback.py report
+$PY scripts/rewrite_with_feedback.py suggest <学科> <强度>  # 获取建议
+$PY scripts/similarity_calculator.py <原文> <改写文>          # 仅分析相似度
+$PY scripts/rewrite_with_feedback.py report                   # 策略报告
 ```

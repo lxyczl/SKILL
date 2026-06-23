@@ -1,103 +1,142 @@
 # English Academic Paper Rewriter
 
-Claude Code skill for rewriting English academic papers to reduce similarity scores (Turnitin, iThenticate, etc.).
-
-## Features
-
-- **Risk analysis engine**: 4-dimension analysis (syntax, vocabulary, AI traces, English-specific) with 17 risk types
-- **Pattern library**: 50+ built-in rules for cliche phrases, connectors, verbose expressions
-- **15 rewriting techniques** across 3 tiers (see SKILL.md for details)
-- **3 intensity levels**: Light (词汇替换), Medium (词汇+结构), Heavy (完全重组)
-- **20 academic domains** with domain-specific terminology protection
-- **Similarity calculator**: LCS + N-gram + consecutive match detection
-- **Turnitin report parsing**: Auto-detect high-priority sections
-- **Feedback learning system**: Learns from user feedback to improve over time
+Claude Code skill for rewriting English academic papers to pass Turnitin plagiarism detection.
 
 ## Quick Start
 
-**直接发文本：**
+**Send text directly:**
 ```
-帮我改写这段英文论文：[粘贴文本]
-```
-
-**给文件：**
-```
-帮我改写这个论文的摘要：E:\Desktop\paper.docx
+Help me rewrite this paragraph from my paper: [paste text]
 ```
 
-**指定选项：**
+**Send a file:**
 ```
-请用中等强度改写这段生态水文领域的论文摘要：[粘贴文本]
+Rewrite the abstract of this paper: E:\Desktop\paper.docx
 ```
+
+**Pipeline with .docx/.pdf directly:**
+```bash
+$PY scripts/run_pipeline.py original.docx rewritten.docx
+$PY scripts/run_pipeline.py original.pdf rewritten.pdf
+```
+
+**With options:**
+```
+Rewrite this ecology/hydrology abstract with medium intensity: [paste text]
+```
+
+**One-click pipeline (after rewriting):**
+```bash
+$PY scripts/run_pipeline.py original.txt rewritten.txt [domain] [intensity]
+```
+
+## How It Works
+
+1. User provides original text (and optionally rewritten text)
+2. Pipeline analyzes similarity, detects hot sentences, auto-evaluates
+3. If `needs_iteration` is true, rewrite hot sentences and re-analyze (max 3 rounds)
+4. Collect feedback → system learns for next time
+
+## Features
+
+- **Analyzer engine**: 8 modules (syntax, vocabulary, AI traces, English-specific, etc.)
+- **Pattern library**: 50+ built-in rules for cliché phrases, connectors, verbose expressions
+- **Similarity calculator**: LCS + N-gram + Turnitin consecutive match detection
+- **Sentence-level hotspot detection**: pinpoints exactly which sentences need rework
+- **Auto-evaluation**: objective verdict (excellent/success/warning/fail) based on metrics
+- **Feedback learning**: learns from user feedback to improve over time
+- **Turnitin report parsing**: auto-detect high-priority sections from Turnitin reports
+
+## Turnitin Rules
+
+- **≥8 consecutive words** = fail (must break)
+- **Trigram precision ≥30%** = warning
+
+## Intensity Levels
+
+| Level | Approach | Use case |
+|-------|----------|----------|
+| 🟢 Light | Synonym replacement only | Low similarity (<25%) |
+| 🟡 Medium | Synonyms + structure adjustment | Medium similarity (25-50%) |
+| 🔴 Heavy | Full restructuring, all techniques | High similarity (>50%) |
+
+## Section Thresholds
+
+| Section | Threshold | Notes |
+|---------|-----------|-------|
+| Abstract | 50 | Highest scrutiny |
+| Introduction | 60 | Literature review risk |
+| Methods | 70 | Standard procedures OK |
+| Results | 70 | Data description OK |
+| Discussion | 60 | Analysis needs variation |
 
 ## File Structure
 
 ```
 paper-rewriter/
-├── SKILL.md                    # 核心技能指令（Claude 读取）
-├── README.md                   # 本文件
-├── analyze.py                  # 分析引擎 CLI 入口
-├── analyzer/                   # 分析引擎
-│   ├── syntax.py               # 句法分析（句长、被动语态、嵌套）
-│   ├── vocabulary.py           # 词汇分析（TTR、连接词、套话）
-│   ├── ai_traces.py            # AI 痕迹检测（流畅度、突发性、个人表达）
-│   ├── english.py              # 英文特征（冠词、模糊限定、名词化）
-│   ├── structure.py            # 结构分析（段落长度、段首模式）
-│   ├── paragraphs.py           # 段落切分与章节识别
-│   ├── patterns.py             # 模式库加载器
-│   └── scorer.py               # 综合评分与优先级排序
-├── patterns/                   # 模式库
-│   ├── builtin.json            # 内置规则（50+ 条）
-│   ├── user.json               # 用户自定义（可选）
-│   └── learned.json            # 自动积累（可选）
-├── references/                 # 参考资料
-│   ├── domains.md              # 20个学科的专业词汇表
-│   ├── examples.md             # 改写示例
-│   ├── techniques.md           # 改写技巧详解
-│   ├── synonyms.md             # 同义词替换表
-│   ├── edge_cases.md           # 边界情况处理
-│   └── advanced.md             # 高级功能说明
-├── scripts/                    # 辅助脚本
-│   ├── document_parser.py      # 文档解析（docx/pdf）
-│   ├── similarity_calculator.py # 相似度计算
-│   ├── rewrite_with_feedback.py # 反馈入口
-│   ├── feedback_system.py      # 反馈记录 & 学习
-│   └── turnitin_parser.py      # Turnitin 报告解析
-├── feedback/                   # 反馈数据
-│   ├── sessions/               # 改写会话记录
-│   └── learning/               # 学习到的策略
-└── tests/                      # 测试
-    ├── test_basic.py           # 单元测试
-    ├── test_analyzer.py        # 分析引擎测试
-    ├── test_real_paper.py      # 真实论文测试
-    ├── test_feedback_system.py # 反馈系统测试
-    ├── test_real_feedback.py   # 反馈集成测试
-    └── test_complete_workflow.py # 完整工作流测试
+├── SKILL.md                    # Core instructions (read by Claude)
+├── README.md                   # This file
+├── analyze.py                  # Analyzer CLI entry point
+├── analyzer/                   # Analysis engine
+│   ├── syntax.py               # Syntax (sentence length, passive voice, nesting)
+│   ├── vocabulary.py           # Vocabulary (CTTR, connectors, clichés)
+│   ├── ai_traces.py            # AI trace detection (fluency, burstiness)
+│   ├── english.py              # English-specific (articles, hedging, nominalization)
+│   ├── structure.py            # Structure (paragraph length, opening patterns)
+│   ├── paragraphs.py           # Paragraph splitting & section detection
+│   ├── patterns.py             # Pattern library loader
+│   └── scorer.py               # Composite scoring & priority ranking
+├── scripts/
+│   ├── run_pipeline.py         # One-click analysis pipeline
+│   ├── similarity_calculator.py # Similarity metrics (LCS, n-gram, consecutive)
+│   ├── feedback_system.py      # Feedback recording & learning
+│   ├── rewrite_with_feedback.py # Rewrite analysis & suggestions
+│   ├── document_parser.py      # Document parsing (docx/pdf)
+│   └── turnitin_parser.py      # Turnitin report parsing
+├── patterns/                   # Pattern library (50+ rules)
+├── references/                 # Reference materials
+│   ├── domains.md              # Domain-specific terminology (20 fields)
+│   ├── synonyms.md             # Synonym replacement table
+│   ├── techniques.md           # Rewriting techniques guide
+│   ├── examples.md             # Rewrite examples
+│   └── edge_cases.md           # Edge case handling
+├── feedback/                   # Feedback data (persisted per project)
+│   ├── sessions/               # Rewrite session records
+│   └── learning/               # Learned strategies
+└── evals/                      # Evaluation benchmarks
 ```
 
-## Intensity Levels
+## Common Mistakes
 
-| 级别 | 做法 | 适用场景 |
-|------|------|---------|
-| 🟢 Light | 主要同义词替换，不改结构 | 低相似度 (<25%) |
-| 🟡 Medium | 同义词+结构调整 | 中等相似度 (25-50%) |
-| 🔴 Heavy | 完全重组，使用所有技巧 | 高相似度 (>50%) |
+| ❌ Don't | ✅ Do |
+|----------|-------|
+| "Rewrite this paragraph" | "Rewrite this paragraph, domain: ecology, intensity: medium" |
+| Heavy intensity for low similarity | Light intensity for low similarity |
+| Accept first rewrite without checking | Run pipeline, check hot sentences |
+| Skip terminology verification | Check that domain terms are preserved |
+
+## Troubleshooting
+
+**Terminology was changed:**
+→ Specify your domain when requesting. Check `references/domains.md` for supported terms.
+
+**Citations were modified:**
+→ Citations like [1] or (Smith, 2020) should always be preserved exactly. If changed, it's a bug.
+
+**Formulas were modified:**
+→ Math formulas ($...$, $$...$$) should always be preserved exactly.
+
+**Rewrite sounds unnatural:**
+→ Try Medium intensity. Specify section type for appropriate style (Methods → past passive, Discussion → present active).
+
+**Similarity still too high:**
+→ Use Heavy intensity. Check for ≥8 consecutive word matches. Consider restructuring the entire paragraph.
+
+**Script import errors:**
+→ Use `$PY` (not `python`). Install dependencies: `$PY -m pip install python-docx PyPDF2 nltk`
 
 ## Supported Domains
 
-生态水文 | 土木水利 | 绿色建筑 | 建筑节能 | 水利工程 | 土木工程 | BIPV | 光伏 | 生态安全格局 | SHAP分析 | 地下水脆弱性 | 生态系统服务 | 半干旱区耦合 | InVEST模型 | 改进DRASTIC | 电路理论 | OWA算法 | 生态源地 | 生态廊道 | 生态阻力面
+Ecological hydrology | Civil/hydraulic engineering | Green building | Building energy | BIPV | Photovoltaic | Ecological security pattern | SHAP analysis | Groundwater vulnerability | Ecosystem services | Semi-arid coupling | InVEST model | Improved DRASTIC | Circuit theory | OWA algorithm | Ecological source/corridor/resistance
 
-完整词汇表见 `references/domains.md`。
-
-## Running Tests
-
-```bash
-$PY -m pytest tests/ -v
-```
-
-## More Info
-
-- 改写技巧和示例 → `references/techniques.md`, `references/examples.md`
-- 高级功能（Turnitin 解析、反馈学习） → `references/advanced.md`
-- 边界情况处理 → `references/edge_cases.md`
-- 同义词表 → `references/synonyms.md`
+Full terminology list: `references/domains.md`
